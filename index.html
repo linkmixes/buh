@@ -210,7 +210,7 @@ const $id=i=>document.getElementById(i);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 function newChat(){return{id:uid(),title:"Nova conversa",time:Date.now(),messages:[]}}
-function blank(){const c=[newChat()];return{theme:"dark",auto:true,fallback:true,tts:false,sel:"auto",systemPrompt:"Você é um assistente útil, claro e objetivo. Responda em português do Brasil.",providers:JSON.parse(JSON.stringify(DEFAULT_PROVIDERS)),chats:c,activeChatId:c[0].id}}
+function blank(){const c=[newChat()];return{theme:"dark",auto:true,fallback:true,tts:false,sel:"auto",systemPrompt:"Você é um assistente útil, claro e objetivo. Responda em português do Brasil.",providers:JSON.parse(JSON.stringify(DEFAULT_PROVIDERS)),chats:c,activeChatId:c[0].id,proxy:{url:"",senha:""}}}
 function loadState(){
   let s=blank();
   try{const raw=localStorage.getItem(SKEY);if(raw){const p=JSON.parse(raw);s={...s,...p};
@@ -229,6 +229,10 @@ function save(){try{localStorage.setItem(SKEY,JSON.stringify(state))}catch(e){to
 function toast(m,t){const d=document.createElement("div");d.className="toast"+(t==="err"?" err":"");d.textContent=m;$id("toasts").appendChild(d);setTimeout(()=>d.remove(),4200)}
 function chat(){return state.chats.find(c=>c.id===state.activeChatId)||state.chats[0]}
 function prov(id){return state.providers.find(p=>p.id===id)}
+const PROXY_PROVIDERS={gemini:1,openrouter:1,huggingface:1,cohere:1};
+function proxyAtivo(){return!!(state.proxy&&state.proxy.url&&state.proxy.senha)}
+function providerDisponivel(p){return!!p&&(p.enabled||(proxyAtivo()&&PROXY_PROVIDERS[p.id]))}
+/* nota: com proxy ativo, as 4 IAs de nuvem ficam disponíveis mesmo sem chave local */
 
 /* ==================== SELETOR ==================== */
 async function checkOllama(){
@@ -243,7 +247,7 @@ function renderSel(){
   const sel=$id("providerSel");
   const list=state.providers.filter(p=>p.type!=="image"&&(p.type!=="ollama"||ollamaOk));
   sel.innerHTML=`<option value="auto">Auto</option>`+
-    list.map(p=>`<option value="${p.id}">${esc(p.name)}${p.enabled?"":" (inativa)"}</option>`).join("");
+    list.map(p=>`<option value="${p.id}">${esc(p.name)}${providerDisponivel(p)?"":" (inativa)"}</option>`).join("");
   if(![...sel.options].some(o=>o.value===state.sel))state.sel="auto";
   sel.value=state.sel;
 }
@@ -253,33 +257,40 @@ function autoOrder(text){
   const code=["openrouter","gemini","huggingface","cohere","ollama"];
   const cria=["gemini","huggingface","openrouter","cohere","ollama"];
   const ids=/c[óo]digo|code|javascript|python|bug|stacktrace|sql/.test(t)?code:(/criativ|roteiro|poema|hist[óo]ria|copy|an[úu]ncio|marketing/.test(t)?cria:geral);
-  return ids.map(prov).filter(p=>p&&p.enabled&&!(p.type==="ollama"&&!ollamaOk));
+  return ids.map(prov).filter(p=>p&&providerDisponivel(p)&&!(p.type==="ollama"&&!ollamaOk));
 }
 
 /* ==================== CHAMADAS ==================== */
-function buildPayload(p,messages,images){
+function providerBody(p,messages,images){
   const sys=messages.find(m=>m.role==="system"&&m.content),hist=messages.filter(m=>m.role!=="system");
-  if(p.type==="ollama"){
-    const msgs=(sys?[sys]:[]).concat(hist).map(m=>({role:m.role,content:m.content}));
-    if(images&&images.length&&p.vision)msgs[msgs.length-1].images=images.map(a=>a.b64);
-    return{url:p.baseUrl.replace(/\/+$/,"")+"/api/chat",opts:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:p.model,messages:msgs,stream:true,keep_alive:"5m",options:{num_ctx:2048}})},stream:true};
-  }
   if(p.type==="gemini"){
     const contents=hist.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]}));
     if(images&&images.length&&p.vision&&contents.length)contents[contents.length-1].parts.push(...images.map(a=>({inline_data:{mime_type:a.mime,data:a.b64}})));
     const body={contents};if(sys)body.systemInstruction={parts:[{text:sys.content}]};
-    return{url:p.baseUrl.replace(/\/+$/,"")+`/models/${p.model}:generateContent?key=${encodeURIComponent(p.apiKey)}`,opts:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}};
+    return body;
   }
   if(p.type==="cohere"){
     const msgs=[];if(sys)msgs.push({role:"system",content:sys.content});
     hist.forEach(m=>msgs.push({role:m.role,content:{type:"text",text:m.content}}));
-    return{url:p.baseUrl.replace(/\/+$/,"")+"/chat",opts:{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+p.apiKey},body:JSON.stringify({model:p.model,messages:msgs})}};
+    return{model:p.model,messages:msgs};
   }
   const msgs=[];if(sys)msgs.push({role:"system",content:sys.content});
   hist.forEach((m,i)=>{if(i===hist.length-1&&images&&images.length&&p.vision){msgs.push({role:m.role,content:[{type:"text",text:m.content},...images.map(a=>({type:"image_url",image_url:{url:`data:${a.mime};base64,${a.b64}`}}))]})}else msgs.push({role:m.role,content:m.content})});
+  return{model:p.model,messages:msgs};
+}
+function buildPayload(p,messages,images){
+  if(p.type==="ollama"){
+    const sys=messages.find(m=>m.role==="system"&&m.content),hist=messages.filter(m=>m.role!=="system");
+    const msgs=(sys?[sys]:[]).concat(hist).map(m=>({role:m.role,content:m.content}));
+    if(images&&images.length&&p.vision)msgs[msgs.length-1].images=images.map(a=>a.b64);
+    return{url:p.baseUrl.replace(/\/+$/,"")+"/api/chat",opts:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:p.model,messages:msgs,stream:true,keep_alive:"5m",options:{num_ctx:2048}})},stream:true};
+  }
+  const body=providerBody(p,messages,images);
+  if(p.type==="gemini")return{url:p.baseUrl.replace(/\/+$/,"")+`/models/${p.model}:generateContent?key=${encodeURIComponent(p.apiKey)}`,opts:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}};
+  if(p.type==="cohere")return{url:p.baseUrl.replace(/\/+$/,"")+"/chat",opts:{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+p.apiKey},body:JSON.stringify(body)}};
   const h={"Content-Type":"application/json",Authorization:"Bearer "+p.apiKey};
   if(p.id==="openrouter"){h["X-Title"]="Buh!";h["HTTP-Referer"]=location.origin||"https://linkmixes.github.io"}
-  return{url:p.baseUrl.replace(/\/+$/,"")+"/chat/completions",opts:{method:"POST",headers:h,body:JSON.stringify({model:p.model,messages:msgs})}};
+  return{url:p.baseUrl.replace(/\/+$/,"")+"/chat/completions",opts:{method:"POST",headers:h,body:JSON.stringify(body)}};
 }
 function parseResp(p,d){
   if(p.type==="gemini"){const c=d&&d.candidates&&d.candidates[0];if(!c)return d&&d.promptFeedback&&d.promptFeedback.blockReason?"[Bloqueado: "+d.promptFeedback.blockReason+"]":null;return c.content&&c.content.parts?c.content.parts.map(x=>x.text||"").join("")||null:null}
@@ -289,6 +300,7 @@ function parseResp(p,d){
   return null;
 }
 async function callProvider(p,messages,images,signal,onDelta,timeoutMs){
+  if(proxyAtivo()&&PROXY_PROVIDERS[p.id])return await callViaProxy(p,messages,images,signal,onDelta,timeoutMs);
   const{url,opts,stream}=buildPayload(p,messages,images);
   const ctl=new AbortController();
   const onAbort=()=>ctl.abort();signal&&signal.addEventListener("abort",onAbort,{once:true});
@@ -315,10 +327,39 @@ async function callProvider(p,messages,images,signal,onDelta,timeoutMs){
     return t;
   }finally{clearTimeout(timer);signal&&signal.removeEventListener("abort",onAbort)}
 }
+/* ---------- chamadas via proxy (Apps Script) ---------- */
+async function proxyRaw(body,signal){
+  const res=await fetch(state.proxy.url.replace(/\/+$/,""),{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body),signal});
+  const raw=await res.text();
+  if(!res.ok)throw new Error("proxy HTTP "+res.status);
+  let d;try{d=JSON.parse(raw)}catch(e){throw new Error("proxy: resposta inválida")}
+  if(d.erro)throw new Error("proxy: "+d.erro);
+  return d;
+}
+async function callViaProxy(p,messages,images,signal,onDelta,timeoutMs){
+  const ctl=new AbortController();const onAbort=()=>ctl.abort();signal&&signal.addEventListener("abort",onAbort,{once:true});
+  const timer=setTimeout(()=>ctl.abort(),timeoutMs||150000);
+  try{
+    const d=await proxyRaw({senha:state.proxy.senha,provider:p.id,model:p.model,acao:"chat",payload:providerBody(p,messages,images)},signal);
+    if(d.status&&d.status!==200)throw new Error("HTTP "+d.status+" — "+String(d.corpo||"").slice(0,160));
+    let data;try{data=JSON.parse(d.corpo)}catch(e){throw new Error("resposta inválida da API")}
+    const t=parseResp(p,data);
+    if(!t)throw new Error("resposta vazia");
+    if(onDelta)onDelta(t);
+    return t;
+  }finally{clearTimeout(timer);signal&&signal.removeEventListener("abort",onAbort)}
+}
 
 /* ==================== AUTO-REPARO DE MODELOS ==================== */
 function isModelError(msg){return /404|not found|no longer available|model_not_supported|invalid model|does not exist|unsupported model/i.test(String(msg))}
 async function listModels(p){
+  if(proxyAtivo()&&PROXY_PROVIDERS[p.id]){
+    const d=await proxyRaw({senha:state.proxy.senha,provider:p.id,acao:"listar"});
+    const data=JSON.parse(d.corpo);
+    if(p.type==="gemini")return(data.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>m.name.replace(/^models\//,""));
+    if(p.type==="cohere")return(data.models||[]).map(m=>m.name);
+    return(data.data||data.models||[]).map(m=>m.id||m.name).filter(Boolean);
+  }
   if(p.type==="gemini"){const r=await fetch(p.baseUrl.replace(/\/+$/,"")+"/models?key="+encodeURIComponent(p.apiKey));if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();return(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>m.name.replace(/^models\//,""))}
   if(p.type==="ollama"){const r=await fetch(p.baseUrl.replace(/\/+$/,"")+"/api/tags");if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();return(d.models||[]).map(m=>m.name)}
   if(p.type==="cohere"){const r=await fetch(p.baseUrl.replace(/\/+$/,"").replace("/v2","/v1")+"/models",{headers:{Authorization:"Bearer "+p.apiKey}});if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();return(d.models||[]).map(m=>m.name)}
@@ -499,7 +540,7 @@ function setStatus(id,st){status[id]=st;renderApiStatus()}
 function renderApiStatus(){
   $id("apiStatus").innerHTML=state.providers.map(p=>{
     const s=status[p.id]||"",cls=s==="ok"?"ok":s==="bad"?"bad":s==="warn"?"warn":"";
-    return`<span class="apill" title="${esc(p.name)}"><span class="dot ${cls}"></span>${esc(p.name.split(" ")[0])}${p.enabled?"":" (off)"}</span>`}).join("");
+    return`<span class="apill" title="${esc(p.name)}"><span class="dot ${cls}"></span>${esc(p.name.split(" ")[0])}${providerDisponivel(p)?"":" (off)"}</span>`}).join("");
 }
 
 /* ==================== RENDER ==================== */
@@ -579,6 +620,15 @@ function renderSettings(){
     <div id="healthLog" style="margin-top:8px"></div>
   </div>
 
+  <div class="panel"><h4>Proxy de chaves (opcional)</h4>
+    <div class="grid2">
+      <label class="f"><b>URL do Apps Script (termina em /exec)</b><input id="proxyUrl" value="${esc(state.proxy&&state.proxy.url||"")}" placeholder="https://script.google.com/macros/s/.../exec"></label>
+      <label class="f"><b>Senha definida no script</b><input id="proxySenha" type="password" value="${esc(state.proxy&&state.proxy.senha||"")}"></label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:9px"><button class="btn primary" id="proxySave">Salvar proxy</button><button class="btn" id="proxyTest">Testar proxy</button></div>
+    <div class="note">Quando preenchido, Gemini, OpenRouter, Hugging Face e Cohere passam a usar as chaves guardadas no SEU Apps Script — nenhuma chave fica no site. O Ollama continua sempre local. Deixe os campos vazios para voltar ao modo com chaves locais. Funciona também para IAs marcadas como inativas.</div>
+  </div>
+
   <div class="panel"><h4>Memória permanente</h4>
     <label class="f"><b>Instruções enviadas em toda conversa</b><textarea id="sysP" rows="3" style="width:100%">${esc(state.systemPrompt||"")}</textarea></label>
     <button class="btn primary" id="sysSave" style="margin-top:9px">Salvar memória</button>
@@ -610,6 +660,11 @@ function renderSettings(){
   });
   b.querySelector("#sysSave").onclick=()=>{state.systemPrompt=b.querySelector("#sysP").value;save();toast("Memória salva")};
   b.querySelector("#healthBtn").onclick=async ev=>{const btn=ev.currentTarget;btn.textContent="Verificando…";btn.disabled=true;await healthCheck(false);btn.textContent="Verificar e corrigir IAs agora";btn.disabled=false};
+  b.querySelector("#proxySave").onclick=()=>{state.proxy={url:b.querySelector("#proxyUrl").value.trim(),senha:b.querySelector("#proxySenha").value.trim()};save();renderSel();renderApiStatus();toast(state.proxy.url?"Proxy salvo":"Proxy desativado — modo local")};
+  b.querySelector("#proxyTest").onclick=async ev=>{state.proxy={url:b.querySelector("#proxyUrl").value.trim(),senha:b.querySelector("#proxySenha").value.trim()};save();const btn=ev.currentTarget;btn.textContent="testando…";btn.disabled=true;
+    try{await callProvider(prov("gemini"),[{role:"user",content:"Responda apenas: ok"}],[],null,null,60000);toast("Proxy funcionando — respondeu pela Gemini")}
+    catch(e){toast("Proxy: "+e.message,"err")}
+    btn.disabled=false;btn.textContent="Testar proxy";};
   b.querySelectorAll("[data-p]").forEach(el=>{
     const p=prov(el.dataset.p);if(!p)return;
     el.querySelectorAll("[data-f]").forEach(inp=>inp.onchange=inp.oninput=()=>{
