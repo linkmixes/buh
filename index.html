@@ -622,7 +622,7 @@ function renderSettings(){
 
   <div class="panel"><h4>Proxy de chaves (opcional)</h4>
     <div class="grid2">
-      <label class="f"><b>URL do Apps Script (termina em /exec)</b><input id="proxyUrl" value="${esc(state.proxy&&state.proxy.url||"")}" placeholder="cole aqui a URL do seu Apps Script"></label>
+      <label class="f"><b>URL do Apps Script (termina em /exec)</b><input id="proxyUrl" value="${esc(state.proxy&&state.proxy.url||"")}" placeholder="VAZIO — cole aqui a URL /exec do seu Apps Script"></label>
       <label class="f"><b>Senha definida no script</b><input id="proxySenha" type="password" value="${esc(state.proxy&&state.proxy.senha||"")}"></label>
     </div>
     <div style="display:flex;gap:8px;margin-top:9px"><button class="btn primary" id="proxySave">Salvar proxy</button><button class="btn" id="proxyTest">Testar proxy</button></div>
