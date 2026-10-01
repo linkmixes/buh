@@ -622,7 +622,7 @@ function renderSettings(){
 
   <div class="panel"><h4>Proxy de chaves (opcional)</h4>
     <div class="grid2">
-      <label class="f"><b>URL do Apps Script (termina em /exec)</b><input id="proxyUrl" value="${esc(state.proxy&&state.proxy.url||"")}" placeholder="https://script.google.com/macros/s/.../exec"></label>
+      <label class="f"><b>URL do Apps Script (termina em /exec)</b><input id="proxyUrl" value="${esc(state.proxy&&state.proxy.url||"")}" placeholder="cole aqui a URL do seu Apps Script"></label>
       <label class="f"><b>Senha definida no script</b><input id="proxySenha" type="password" value="${esc(state.proxy&&state.proxy.senha||"")}"></label>
     </div>
     <div style="display:flex;gap:8px;margin-top:9px"><button class="btn primary" id="proxySave">Salvar proxy</button><button class="btn" id="proxyTest">Testar proxy</button></div>
@@ -660,9 +660,14 @@ function renderSettings(){
   });
   b.querySelector("#sysSave").onclick=()=>{state.systemPrompt=b.querySelector("#sysP").value;save();toast("Memória salva")};
   b.querySelector("#healthBtn").onclick=async ev=>{const btn=ev.currentTarget;btn.textContent="Verificando…";btn.disabled=true;await healthCheck(false);btn.textContent="Verificar e corrigir IAs agora";btn.disabled=false};
-  b.querySelector("#proxySave").onclick=()=>{state.proxy={url:b.querySelector("#proxyUrl").value.trim(),senha:b.querySelector("#proxySenha").value.trim()};save();renderSel();renderApiStatus();toast(state.proxy.url?"Proxy salvo":"Proxy desativado — modo local")};
+  b.querySelector("#proxySave").onclick=()=>{state.proxy={url:b.querySelector("#proxyUrl").value.trim(),senha:b.querySelector("#proxySenha").value.trim()};save();renderSel();renderApiStatus();
+    if(!state.proxy.url&&state.proxy.senha)toast("Cole também a URL do Apps Script no campo URL","err");
+    else toast(state.proxy.url?"Proxy salvo":"Proxy desativado — modo local")};
   b.querySelector("#proxyTest").onclick=async ev=>{state.proxy={url:b.querySelector("#proxyUrl").value.trim(),senha:b.querySelector("#proxySenha").value.trim()};save();const btn=ev.currentTarget;btn.textContent="testando…";btn.disabled=true;
-    try{await callProvider(prov("gemini"),[{role:"user",content:"Responda apenas: ok"}],[],null,null,60000);toast("Proxy funcionando — respondeu pela Gemini")}
+    try{
+      if(!state.proxy.url)throw new Error("cole a URL do Apps Script no campo URL (termina em /exec)");
+      if(!state.proxy.senha)throw new Error("preencha a senha definida no script");
+      await callProvider(prov("gemini"),[{role:"user",content:"Responda apenas: ok"}],[],null,null,60000);toast("Proxy funcionando — respondeu pela Gemini")}
     catch(e){toast("Proxy: "+e.message,"err")}
     btn.disabled=false;btn.textContent="Testar proxy";};
   b.querySelectorAll("[data-p]").forEach(el=>{
