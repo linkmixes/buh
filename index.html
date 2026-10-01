@@ -224,18 +224,26 @@ function loadState(){
   }}catch(e){}
   return s;
 }
-let state=loadState(),status={},attachments=[],recognition=null,listening=false,busy=false,aborter=null;
+let state=loadState(),status={},attachments=[],recognition=null,listening=false,busy=false,aborter=null,ollamaOk=false;
 function save(){try{localStorage.setItem(SKEY,JSON.stringify(state))}catch(e){toast("Armazenamento do navegador cheio","err")}}
 function toast(m,t){const d=document.createElement("div");d.className="toast"+(t==="err"?" err":"");d.textContent=m;$id("toasts").appendChild(d);setTimeout(()=>d.remove(),4200)}
 function chat(){return state.chats.find(c=>c.id===state.activeChatId)||state.chats[0]}
 function prov(id){return state.providers.find(p=>p.id===id)}
 
 /* ==================== SELETOR ==================== */
-function chatProviders(){return state.providers.filter(p=>p.enabled)}
+async function checkOllama(){
+  const p=prov("ollama");if(!p)return;
+  try{const c=new AbortController();const t=setTimeout(()=>c.abort(),2500);
+    const r=await fetch(p.baseUrl.replace(/\/+$/,"")+"/api/version",{signal:c.signal});clearTimeout(t);
+    ollamaOk=r.ok;
+  }catch(e){ollamaOk=false}
+  renderSel();renderApiStatus();
+}
 function renderSel(){
   const sel=$id("providerSel");
+  const list=state.providers.filter(p=>p.type!=="image"&&(p.type!=="ollama"||ollamaOk));
   sel.innerHTML=`<option value="auto">Auto</option>`+
-    chatProviders().map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    list.map(p=>`<option value="${p.id}">${esc(p.name)}${p.enabled?"":" (inativa)"}</option>`).join("");
   if(![...sel.options].some(o=>o.value===state.sel))state.sel="auto";
   sel.value=state.sel;
 }
@@ -245,7 +253,7 @@ function autoOrder(text){
   const code=["openrouter","gemini","huggingface","cohere","ollama"];
   const cria=["gemini","huggingface","openrouter","cohere","ollama"];
   const ids=/c[óo]digo|code|javascript|python|bug|stacktrace|sql/.test(t)?code:(/criativ|roteiro|poema|hist[óo]ria|copy|an[úu]ncio|marketing/.test(t)?cria:geral);
-  return ids.map(prov).filter(p=>p&&p.enabled);
+  return ids.map(prov).filter(p=>p&&p.enabled&&!(p.type==="ollama"&&!ollamaOk));
 }
 
 /* ==================== CHAMADAS ==================== */
@@ -378,7 +386,7 @@ async function healthCheck(silent){
       setStatus(p.id,"bad");p.lastErr=msg.slice(0,140);out.push({p,ok:false,err:msg.slice(0,90)});
     }
   }
-  save();
+  save();checkOllama();
   const log=$id("healthLog");
   if(log)log.innerHTML=out.map(r=>`<div class="note" style="margin:2px 0"><span class="dot ${r.ok?"ok":(r.fixed?"warn":"bad")}"></span> <b>${esc(r.p.name)}</b> ${r.fixed?"— modelo corrigido: "+esc(r.fixed):(r.ok?"— ok":"— "+esc(r.err||"falhou"))}</div>`).join("");
   if(!silent){const nOk=out.filter(r=>r.ok).length;toast("Verificação: "+nOk+"/"+out.length+" IAs ok"+(out.some(r=>r.fixed)?" — modelos corrigidos":""))}
@@ -656,7 +664,7 @@ async function ollamaModels(){const p=prov("ollama");if(!p)return;try{const r=aw
 /* ==================== INIT ==================== */
 function applyTheme(){document.body.classList.toggle("light",state.theme==="light")}
 function renderAll(){applyTheme();renderSel();renderChats();renderMsgs();renderApiStatus();renderAtts()}
-renderAll();
+renderAll();checkOllama();
 document.addEventListener("keydown",e=>{if(e.key==="Escape")$id("setOverlay").classList.remove("show")});
 </script>
 </body>
